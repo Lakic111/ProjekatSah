@@ -72,29 +72,27 @@ void tb_vp::test() {
         for (int n = 0; n < 8; n++) {
 
             uint64_t ddr_seg_addr  = ADDR_DDR + (m * seg_h * iw) + (n * seg_w);
-            uint64_t bram_seg_addr = ADDR_BRAM + 0x80000;
 
-            // DMA: isecanje segmenta iz slike u DDR-u -> BRAM bafer.
-            // configure_dma samo okine prenos; DMA radi u svom procesu,
-            // pa čekamo njegov "done" događaj (prolazi samo setup vreme).
-            configure_dma(ddr_seg_addr, bram_seg_addr, seg_w, seg_h, iw, seg_w, delay);
-            wait(*m_dma_done);                    // čeka kraj DMA prenosa (samo setup vreme)
-
-            // CPU čita segment iz BRAM-a radi provere da li je polje prazno
-            vector<uint8_t> seg_buf(seg_w * seg_h);
-            read_data(bram_seg_addr, seg_buf, delay);
-
+            // Provjera praznog polja direktno iz DDR-a (bez DMA-a).
+            // Čitamo centralnu zonu segmenta red po red (stride-aware).
             int sum = 0, count = 0;
             for (int y = 29; y <= 59; y++) {
-                for (int x = 29; x <= 59; x++) {
-                    sum += seg_buf[y * seg_w + x];
-                    count++;
-                }
+                vector<uint8_t> row_buf(31);
+                read_data(ADDR_DDR + ((m * seg_h + y) * iw) + (n * seg_w + 29), row_buf, delay);
+                for (uint8_t v : row_buf) { sum += v; count++; }
             }
             int mean = sum / count;
-            int p10_10 = seg_buf[9 * seg_w + 9];
 
-            if (mean != p10_10) {
+            uint8_t p10_val;
+            read_data(ADDR_DDR + ((m * seg_h + 10) * iw) + (n * seg_w + 10), &p10_val, 1, delay);
+
+            if (mean != (int)p10_val) {
+                uint64_t bram_seg_addr = ADDR_BRAM + 0x80000;
+
+                // DMA samo za neprazna polja
+                configure_dma(ddr_seg_addr, bram_seg_addr, seg_w, seg_h, iw, seg_w, delay);
+                wait(*m_dma_done);
+
                 cout << "\n[TB] Processing Segment (" << m << "," << n << ") - Evaluating against 12 templates..." << endl;
 
                 // Kažemo NCC-u gde je segment slike u BRAM-u -> NCC ga sam pročita
