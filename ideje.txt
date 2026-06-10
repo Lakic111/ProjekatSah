@@ -1,0 +1,95 @@
+============================================================
+  IDEJE ZA IMPLEMENTACIJU - Chess VP (SystemC TLM-2.0)
+============================================================
+
+------------------------------------------------------------
+1. NCC cita BRAM unutar b_transport - TREBA PREMESTITI
+------------------------------------------------------------
+Problem:
+  Kada TB upise REG_IMG_ADDR i REG_TMP_ADDR, read_from_bram()
+  se poziva unutar b_transport, sto blokira CPU TLM transakciju.
+
+Resenje:
+  - b_transport samo cuva adrese (img_addr, tmp_addr)
+  - ncc_proc() thread sam cita BRAM na pocetku obrade
+  - Citanje se tako preklapa sa korisnim poslom, CPU nije blokiran
+
+Fajlovi: src/ncc.cpp, src/ncc.hpp
+
+------------------------------------------------------------
+2. Double-buffering za DMA + NCC pipeline
+------------------------------------------------------------
+Problem:
+  Dok NCC obradjuje tekuci segment (103.6 ms), DMA miruje.
+
+Resenje:
+  - Dva BRAM bafera: buf_A (0x80000), buf_B (0x90000)
+  - TB naizmenicno koristi bafere (cur_buf ^= 1)
+  - Dok NCC obradjuje buf_A, DMA puni buf_B i obrnuto
+
+Vremenski dobitak:
+  DMA setup (320 ns) se preklapa sa NCC obradom (103.6 ms)
+
+Fajlovi: src/tb.cpp, src/common.hpp
+
+------------------------------------------------------------
+3. Preskociti DMA za prazna polja (LAKO, VISOK UTICAJ)
+------------------------------------------------------------
+Problem:
+  TB uvek pokrece DMA pa tek provjerava je li polje prazno.
+  Za ~32 prazna polja = 32 x (320 ns DMA setup) nepotrebno.
+  (Ako se doda NCC: 32 x 12 x 103.6 ms = ogromno)
+
+Resenje:
+  - Procitati par piksela direktno iz DDR-a (DDR latencija = 0)
+  - Ako je polje prazno, preskociti DMA i NCC u potpunosti
+
+Fajlovi: src/tb.cpp
+
+------------------------------------------------------------
+4. delay akumulacija u TB - dizajn problem
+------------------------------------------------------------
+Problem:
+  Isti sc_time delay se prosledjuje svim transakcijama i
+  akumulira kroz celu simulaciju. Konzumira se tek na kraju
+  sa wait(delay). Funkcionise jer su svi delay-evi SC_ZERO_TIME,
+  ali je fragilan dizajn.
+
+Resenje:
+  - Koristiti lokalne sc_time objekte po transakciji, ili
+  - Prosledjivati SC_ZERO_TIME direktno
+
+Fajlovi: src/tb.cpp
+
+------------------------------------------------------------
+5. AXI GP port latencija za CPU upise registara
+------------------------------------------------------------
+Problem:
+  CPU pristupa PL periferijama preko AXI GP porta koji ima
+  svoju latenciju (~100 ns per transakciju). Trenutno se
+  ne modeli.
+
+Resenje:
+  - Dodati 100 ns delay u sys_bus::b_transport za svaki prolaz
+
+Fajlovi: src/sys_bus.cpp
+
+------------------------------------------------------------
+6. NCC - paralelna obrada vise sablona (HW prosirenje)
+------------------------------------------------------------
+Ideja:
+  Trenutno 12 sablona se procesiraju sekvencijalno.
+  Ako bi se dodalo vise NCC jedinica, mogli bi raditi paralelno.
+  (Zahteva vecu arhitekturnu promenu)
+
+------------------------------------------------------------
+PRIORITETI:
+------------------------------------------------------------
+  [LAKO]   3. Preskociti DMA za prazna polja
+  [SREDNJE] 1. NCC BRAM citanje u ncc_proc()
+  [SREDNJE] 4. delay akumulacija
+  [TEZE]   2. Double-buffering DMA+NCC
+  [TEZE]   5. AXI GP latencija
+  [ARHITEKTURA] 6. Vise NCC jedinica paralelno
+
+============================================================
