@@ -45,14 +45,9 @@ void NCC_Target::b_transport(tlm_generic_payload& trans, sc_time& delay) {
         else if (addr == REG_TMP_H) tmp_h = *(int*)ptr;
         else if (addr == REG_IMG_ADDR) {
             img_addr = *(uint32_t*)ptr;
-            image.resize((size_t)img_w * img_h);
-            read_from_bram(img_addr, image.data(), (unsigned int)(img_w * img_h));
         }
         else if (addr == REG_TMP_ADDR) {
             tmp_addr = *(uint32_t*)ptr;
-            templ.resize((size_t)tmp_w * tmp_h);
-            read_from_bram(tmp_addr, templ.data(), (unsigned int)(tmp_w * tmp_h));
-            calculate_template_mean();
         }
         else if (addr == REG_CTRL && *(uint32_t*)ptr == 1) {
             // Samo okidanje procesa - vreme obrade prolazi u ncc_proc(), ne ovde.
@@ -75,15 +70,22 @@ void NCC_Target::b_transport(tlm_generic_payload& trans, sc_time& delay) {
 
 // SC_THREAD: hardverski blok koji radi paralelno sa CPU-om i DMA-om.
 void NCC_Target::ncc_proc() {
-    // broj ciklusa iz Vitis HLS izveštaja -> modelovano vreme obrade
     const long long hls_ciklusi = 10360183;
     while (true) {
         wait(start_ev);
-        hw_status = 0;                                  // BUSY
-        compute_full_matrix();                          // funkcionalni rezultat
-        wait(hls_ciklusi * 10, SC_NS);                  // OVDE prolazi vreme obrade
-        hw_status = 1;                                  // DONE
-        done_ev.notify();                               // "interrupt" ka CPU
+        hw_status = 0;
+
+        // BRAM čitanje u SC_THREAD-u: CPU nije blokiran, može raditi paralelno.
+        image.resize((size_t)img_w * img_h);
+        read_from_bram(img_addr, image.data(), (unsigned int)(img_w * img_h));
+        templ.resize((size_t)tmp_w * tmp_h);
+        read_from_bram(tmp_addr, templ.data(), (unsigned int)(tmp_w * tmp_h));
+        calculate_template_mean();
+
+        compute_full_matrix();
+        wait(hls_ciklusi * 10, SC_NS);
+        hw_status = 1;
+        done_ev.notify();
     }
 }
 
