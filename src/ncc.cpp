@@ -2,7 +2,6 @@
 #include <cstring>
 
 using namespace sc_core;
-using namespace sc_dt;
 using namespace tlm;
 using namespace std;
 
@@ -90,10 +89,10 @@ void NCC_Target::ncc_proc() {
 
 void NCC_Target::calculate_template_mean() {
     if (templ.empty()) { template_mean = 0; return; }
-    sc_uint<22> sum = 0;
-    for (uint8_t val : templ) sum += (sc_uint<8>)val;
+    uint32_t sum = 0;
+    for (uint8_t val : templ) sum += val;
     unsigned n = (unsigned)templ.size();
-    template_mean = (int)((sum.to_uint() + (n >> 1)) / n);
+    template_mean = (int)((sum + (n >> 1)) / n);
 }
 
 void NCC_Target::compute_full_matrix() {
@@ -114,43 +113,37 @@ result_t NCC_Target::solve_single_point(int u, int v) {
     const int count = tmp_w * tmp_h;
     if (count == 0) return 0;
 
-    sc_uint<22> sum_f = 0;
+    uint32_t sum_f = 0;
     for (int y = 0; y < tmp_h; y++)
         for (int x = 0; x < tmp_w; x++)
-            sum_f += (sc_uint<8>) image[(v + y) * img_w + (u + x)];
+            sum_f += image[(v + y) * img_w + (u + x)];
 
-    sc_uint<8> f_bar = (sc_uint<8>)((sum_f.to_uint() + (count >> 1)) / count);
+    int f_bar = (int)((sum_f + (count >> 1)) / count);
 
-    sc_int<30>  sum_num   = 0;
-    sc_uint<29> sum_den_f = 0;
-    sc_uint<29> sum_den_t = 0;
+    int64_t  sum_num   = 0;
+    int64_t  sum_den_f = 0;
+    int64_t  sum_den_t = 0;
 
     for (int y = 0; y < tmp_h; y++) {
         for (int x = 0; x < tmp_w; x++) {
-            sc_int<9> diff_f = (int)image[(v + y) * img_w + (u + x)] - (int)f_bar;
-            sc_int<9> diff_t = (int)templ [y * tmp_w + x]            - template_mean;
+            int diff_f = (int)image[(v + y) * img_w + (u + x)] - f_bar;
+            int diff_t = (int)templ [y * tmp_w + x]            - template_mean;
 
-            sc_int<17> p_num = diff_f * diff_t;
-            sc_int<17> p_ff  = diff_f * diff_f;
-            sc_int<17> p_tt  = diff_t * diff_t;
-
-            sum_num   += p_num;
-            sum_den_f += (sc_uint<17>) p_ff;
-            sum_den_t += (sc_uint<17>) p_tt;
+            sum_num   += diff_f * diff_t;
+            sum_den_f += diff_f * diff_f;
+            sum_den_t += diff_t * diff_t;
         }
     }
 
     if (sum_den_f == 0 || sum_den_t == 0) return 0;
 
-    sc_uint<58> num_sq   = (sc_uint<58>)(sum_num.to_int64()  * sum_num.to_int64());
-    sc_uint<58> den_prod = (sc_uint<58>)(sum_den_f.to_uint64() * sum_den_t.to_uint64());
+    uint64_t num_sq   = (uint64_t)(sum_num   * sum_num);
+    uint64_t den_prod = (uint64_t)(sum_den_f * sum_den_t);
     if (den_prod == 0) return 0;
 
-    // NCC^2 kao sc_ufixed<32,1> (Q1.31). Deljenje u širem ufixed tipu da
-    // bi se zadržali frakcioni bitovi.
-    sc_ufixed<90, 58> num_f   = num_sq.to_double();
-    sc_ufixed<90, 58> den_f2  = den_prod.to_double();
-    sc_ufixed<32, 1, SC_RND, SC_SAT> ncc2 = num_f / den_f2;
+    // NCC^2 u Q1.31 fixed-point formatu (u HW-u bi bilo sc_ufixed<32,1>)
+    double ncc2 = (double)num_sq / (double)den_prod;
+    if (ncc2 > 1.0) ncc2 = 1.0;
 
-    return (result_t) ncc2.range(31, 0).to_uint();
+    return (result_t)(ncc2 * 2147483648.0);
 }
